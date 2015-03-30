@@ -6,6 +6,15 @@ import os
 import subprocess
 import sys
 import textwrap
+from itertools import chain
+
+
+CLASSES = {
+    "angola": "Angola",
+    "benguela": "Benguela",
+    "saobento": "Sao Bento",
+    "regional": "Regional",
+}
 
 
 def walk(root, action, format, meta):
@@ -67,7 +76,7 @@ def def_elts(**args):
         elif numargs == 0:
             build = lambda: gen([])
         elif numargs == 1:
-            build = lambda x: gen([x])
+            build = lambda x: gen(x)
         else:
             def build(*args):
                 if len(args) != numargs:
@@ -93,6 +102,8 @@ def_elts(
     Header=3,
     RawBlock=2,
     RawInline=2,
+    Str=1,
+    Link=2,
     Para=None,
 )
 
@@ -171,13 +182,6 @@ def with_latex_env(name):
 
 
 def latex_classify(key, value, *ks):
-    CLASSES = {
-        "angola": "Angola",
-        "benguela": "Benguela",
-        "saobento": "Sao Bento",
-        "regional": "Regional",
-    }
-
     classes = [cl
                for cl in (CLASSES.get(cl) for cl in value[1][1])
                if cl is not None]
@@ -220,15 +224,16 @@ def page_columns(key, value, format, meta):
         return RawBlock('latex', COL_CFG[attrs.get('columns', '2')])
 
 
-def filter_hidden(doc, format, meta):
-    is_header = is_type('Header')
-
-    headers = iterate_elements(
+def collect_headers(doc, format='', meta=[]):
+    return iterate_elements(
         doc[1],
         lambda k, v, *rest: v if Header.check(k) else None,
         format,
         meta)
-    for header in headers:
+
+
+def filter_hidden(doc, format, meta):
+    for header in collect_headers(doc, format, meta):
         classes = header[1][1]
         if 'hidden' in classes:
             return None
@@ -239,7 +244,7 @@ all_pred = with_pred(all)
 any_pred = with_pred(any)
 latex_same_page = with_latex_env('samepage')
 doc_filter = mk_filter(filter_hidden,
-                       remove_if('Link'),
+                       # remove_if('Link'),
                        remove_if(all_pred('Para', is_empty)),
                        elem('Para', latex_same_page),
                        elem(Header.name, latex_title_footer),
@@ -247,8 +252,21 @@ doc_filter = mk_filter(filter_hidden,
                        splice_before(page_columns))
 
 
-def filter_file(input, format=''):
-    return doc_filter(json.loads(input.read()), format)
+def iflatten(it):
+    return (x for xs in it for x in xs)
+
+
+def dict_groupby(data, keyfunc, datafunc=None):
+    d = {}
+    extract_data = datafunc if datafunc is not None else lambda x: x
+    for elem in data:
+        key = keyfunc(elem)
+        lst = d.get(key)
+        if lst is None:
+            lst = []
+            d[key] = lst
+        lst.append(extract_data(elem))
+    return d
 
 
 def process_file(path):
@@ -259,10 +277,18 @@ def process_file(path):
          path,
         ],
         stdout=subprocess.PIPE)
-    doc = filter_file(pandoc.stdout)
+    doc_ast = json.loads(pandoc.stdout.read())
+    doc = doc_filter(doc_ast)
     if doc is not None:
-        for elem in doc[1]:
-            yield elem
+        hdr_info = ((hdr[1][0], hdr[1][1], hdr[2])
+                    for hdr in collect_headers(doc_ast))
+        tags = ((tag, link, title)
+                for link, tags, title in hdr_info
+                for tag in tags
+                if tag in CLASSES)
+        return tags, doc[1]
+    else:
+        return [], []
 
 
 def iter_filenames(root):
@@ -271,16 +297,32 @@ def iter_filenames(root):
             yield os.path.join(folder, file)
 
 
+def gen_toc(title, tags):
+    def gen_entry(link, title):
+        return Para(Link(title, ['#' + link, '']))
+
+    return chain(
+        [LaTexBlock('\\twocolumn'),
+         Header(1, [title, [], []], [Str(title)])],
+        (gen_entry(*t) for t in tags),
+        [LaTexBlock('\\newpage')])
+
+
 def main(args):
     use_pandoc = args.to != 'json'
 
     md_files = (path
                 for path in iter_filenames(args.path)
                 if os.path.splitext(path)[1] == '.md')
-    elems = (elem
-             for path in md_files
-             for elem in process_file(path))
-
+    docs = [process_file(path) for path in md_files]
+    tags = dict_groupby(iflatten(tags for tags, _ in docs),
+                        lambda x: x[0],
+                        lambda x: (x[1], x[2]))
+    tocs = (gen_toc(cl, tags[k])
+            for cl in sorted(CLASSES.values())
+            for k, v in CLASSES.items()
+            if v == cl)
+    elems = chain(iflatten(tocs), iflatten(elems for _, elems in docs))
 
     if use_pandoc:
         pandoc_args = [
