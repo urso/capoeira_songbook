@@ -333,6 +333,7 @@ def main(args):
             '-t', 'latex',
             '-V', 'documentclass=extarticle',
             '-V', 'fontsize:12pt',
+            '-V', 'linkcolor:black',
             '-V', 'geometry:a5paper',
             '-V', 'geometry:landscape',
             '-V', 'geometry:headheight=0cm',
