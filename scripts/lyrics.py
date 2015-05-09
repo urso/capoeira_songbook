@@ -10,6 +10,7 @@ from itertools import chain
 
 
 CLASSES = {
+    "ladainha": "Ladainha",
     "angola": "Angola",
     "benguela": "Benguela",
     "saobento": "Sao Bento",
